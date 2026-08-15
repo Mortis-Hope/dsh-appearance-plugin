@@ -1,5 +1,7 @@
 # dsh-appearance — DeepSeek Harness appearance plugin
 
+**[中文](README.md) | English**
+
 A plugin that beautifies the DeepSeek Harness web interface:
 
 - 🎨 **Three palette presets**: Default / Neon / Fresh, automatically adapting to the system light/dark scheme

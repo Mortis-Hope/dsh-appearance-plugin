@@ -1,5 +1,7 @@
 # dsh-appearance — DeepSeek Harness 外观插件
 
+**[English](README.en.md) | 中文**
+
 一款美化 DeepSeek Harness Web 界面的插件:
 
 - 🎨 **三套配色方案**:默认 / 霓虹 / 清爽,自动适配系统明暗模式
@@ -112,5 +114,3 @@ A: 动态导入的插件是会话级的,换设备或刷新后请按「安装 - �
 ## 反馈
 
 使用中遇到问题或有任何建议,欢迎提交 [GitHub Issue](https://github.com/Mortis-Hope/dsh-appearance-plugin/issues)。
-
-[English version](README.en.md) | 中文
