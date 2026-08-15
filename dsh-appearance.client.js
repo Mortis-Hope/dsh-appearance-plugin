@@ -9,6 +9,7 @@
 //   - 配色方案:默认 / 霓虹(蓝黑+青)/ 清爽(浅色+蓝),明暗自适应
 //   - 渐变背景:两个端点色(原生取色器 + RGB 数字输入)+ 角度
 //   - 图片/视频壁纸:本地文件导入,透明度/暗化调节
+//   - 对话框设置:玻璃输入框(透明度/模糊强度/渐变边框)实时调节
 //   - 设置入口:设置 →「外观」;背景承载层挂在 shell.overlay
 // =============================================================
 
@@ -53,7 +54,7 @@ return {
       },
     }
 
-    // ---- 背景模式下需要半透明化的表面及其 alpha ----
+    // ---- 壁纸模式下需要半透明化的表面及其 alpha ----
     const TINT_ALPHAS = {
       '--dsw-alias-bg-base': 0.5,
       '--dsw-specific-sidebar-fill': 0.55,
@@ -85,7 +86,10 @@ return {
 
     // ---- 轻量状态 store ----
     const store = {
-      state: { palette: 'default', wallpaper: null, opacity: 0.85, dim: 0.2 },
+      state: {
+        palette: 'default', wallpaper: null, opacity: 0.85, dim: 0.2,
+        glassEnabled: true, glassAlpha: 0.28, glassBlur: 32, glassBorder: true,
+      },
       listeners: new Set(),
       getState: function () { return this.state },
       setState: function (patch) {
@@ -146,6 +150,38 @@ return {
       }
     })
 
+    // ---- 玻璃输入框 CSS:按 store 状态实时生成 ----
+    function glassCss(s) {
+      if (!s.glassEnabled) return ''
+      const a = s.glassAlpha
+      const blurRule = s.glassBlur > 0
+        ? 'backdrop-filter:blur(' + s.glassBlur + 'px) saturate(150%)!important;-webkit-backdrop-filter:blur(' + s.glassBlur + 'px) saturate(150%)!important;'
+        : ''
+      var lightBg, darkBg, lightBorder, darkBorder
+      if (s.glassBorder) {
+        lightBg = 'linear-gradient(rgba(255,255,255,' + a + '),rgba(255,255,255,' + a + ')) padding-box,linear-gradient(135deg,rgba(255,255,255,0.8),rgba(255,255,255,0.12) 40%,rgba(255,255,255,0.55)) border-box'
+        darkBg = 'linear-gradient(rgba(8,13,22,' + a + '),rgba(8,13,22,' + a + ')) padding-box,linear-gradient(135deg,rgba(34,211,238,0.85),rgba(255,255,255,0.05) 40%,rgba(139,92,246,0.85)) border-box'
+        lightBorder = '1px solid transparent'
+        darkBorder = '1px solid transparent'
+      } else {
+        lightBg = 'rgba(255,255,255,' + a + ')'
+        darkBg = 'rgba(8,13,22,' + a + ')'
+        lightBorder = '1px solid rgba(255,255,255,0.35)'
+        darkBorder = '1px solid rgba(255,255,255,0.14)'
+      }
+      return '[data-composer-card]{background:' + lightBg + '!important;' + blurRule + 'border:' + lightBorder + '!important;box-shadow:0 8px 32px rgba(0,0,0,0.15)!important;}'
+        + 'body[data-ds-dark-theme] [data-composer-card]{background:' + darkBg + '!important;border:' + darkBorder + '!important;box-shadow:0 8px 40px rgba(0,0,0,0.4)!important;}'
+    }
+    ctx.effect(function () {
+      const tag = document.createElement('style')
+      tag.dataset.dshGlass = 'true'
+      document.head.append(tag)
+      const render = function () { tag.textContent = glassCss(store.getState()) }
+      render()
+      const unsub = store.subscribe(render)
+      return function () { unsub(); tag.remove() }
+    })
+
     // ---- 注入样式:overlay 降层 + 控件美化 ----
     ctx.effect(function () {
       return styles.insert(
@@ -195,6 +231,57 @@ return {
     }
     function Hint(props) {
       return React.createElement('div', { style: { fontSize: 12, color: 'var(--dsw-alias-label-secondary)' } }, props.children)
+    }
+    // 开关行
+    function SwitchRow(props) {
+      return React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+        React.createElement('span', { style: { fontSize: 13, color: 'var(--dsw-alias-label-primary)' } }, props.label),
+        React.createElement('span', { style: { flex: 1 } }),
+        React.createElement('button', {
+          onClick: function () { props.onChange(!props.value) },
+          style: {
+            width: 36, height: 20, borderRadius: 10, border: 'none', cursor: 'pointer', padding: 0, position: 'relative',
+            background: props.value ? 'var(--dsw-alias-brand-primary)' : 'var(--dsw-alias-border-l2)',
+            transition: 'background 0.15s',
+          },
+        },
+          React.createElement('span', { style: {
+            position: 'absolute', top: 2, left: props.value ? 18 : 2, width: 16, height: 16, borderRadius: '50%',
+            background: '#ffffff', boxShadow: '0 1px 2px rgba(0, 0, 0, 0.3)', transition: 'left 0.15s',
+          } }),
+        ),
+      )
+    }
+    // 带后缀的滑杆行
+    function SliderRow(props) {
+      return React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+        React.createElement('span', { style: { fontSize: 12, width: 56, color: 'var(--dsw-alias-label-secondary)' } }, props.label),
+        React.createElement('input', { type: 'range', min: props.min, max: props.max, step: props.step, value: props.value, onChange: function (e) { props.onChange(parseFloat(e.target.value)) }, style: { flex: 1 } }),
+        React.createElement('span', { style: { fontSize: 12, width: 44, textAlign: 'right', color: 'var(--dsw-alias-label-secondary)' } }, props.value + props.suffix),
+      )
+    }
+
+    // 对话框设置:玻璃输入框调节
+    function GlassSection() {
+      const state = useStore()
+      const set = function (patch) { store.setState(patch) }
+      return React.createElement(Card, null,
+        React.createElement(CardTitle, null, '对话框设置'),
+        React.createElement(SwitchRow, { label: '玻璃输入框', value: state.glassEnabled, onChange: function (v) { set({ glassEnabled: v }) } }),
+        state.glassEnabled ? React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
+          React.createElement(SliderRow, {
+            label: '透明度', min: 10, max: 90, step: 5, suffix: '%',
+            value: Math.round((1 - state.glassAlpha) * 100),
+            onChange: function (v) { set({ glassAlpha: Math.max(0.1, Math.min(0.9, 1 - v / 100)) }) },
+          }),
+          React.createElement(SliderRow, {
+            label: '模糊强度', min: 0, max: 60, step: 2, suffix: 'px',
+            value: state.glassBlur,
+            onChange: function (v) { set({ glassBlur: v }) },
+          }),
+          React.createElement(SwitchRow, { label: '渐变边框', value: state.glassBorder, onChange: function (v) { set({ glassBorder: v }) } }),
+        ) : null,
+      )
     }
 
     // 配色方案:带色点的紧凑按钮
@@ -355,7 +442,8 @@ return {
       return React.createElement('div', { 'data-dsh-appearance': '', style: { display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 440 } },
         React.createElement(PaletteSection, null),
         React.createElement(BackgroundSection, null),
-        React.createElement(Hint, null, '背景与渐变仅当前会话生效,刷新后需重新设置;配色方案即时生效。'),
+        React.createElement(GlassSection, null),
+        React.createElement(Hint, null, '背景与渐变仅当前会话生效,刷新后需重新设置;配色与对话框设置即时生效。'),
       )
     }
 
