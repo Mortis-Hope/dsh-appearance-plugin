@@ -1,0 +1,20 @@
+# dsh-appearance 部署 patch overlay
+#
+# 把外观插件挂进 web profile 的组合。这不是一棵独立的配置树,而是与
+# dsh-base / dsh-web-app bundle 层同级的 patch overlay:
+#
+#   部署方式(任选其一):
+#   1. 启动时挂载:  dsh web --patch ./dsh-appearance.cordis.yml
+#   2. 固化到用户层: 把本文件内容追加到 $DSH_HOME/.dsh/cordis.patch.yml
+#      (Windows: %USERPROFILE%\.dsh\cordis.patch.yml;不存在则创建)
+#
+# 前提:环境中安装了 @deepseek-ai/dsh-client-ui-appearance 包
+#   (workspace 构建或 npm 发布后安装),并且其 lib/client.js 已构建。
+# 生效方式:patch 让 host Loader 挂载该行;client-modules 扫描到包内的
+#   dsh.client 声明后,把它编入 window.__DSH_BOOT__ 浏览器模块表,
+#   /plugins/@deepseek-ai/dsh-client-ui-appearance/client.js 即被页面加载。
+#   重启 dsh web(或触发配置重载)后生效。
+
+- insert:
+    - id: appearance
+      name: '@deepseek-ai/dsh-client-ui-appearance'
