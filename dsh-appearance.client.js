@@ -5,11 +5,14 @@
 //
 // 使用方法见同目录 README.md。
 //
-// 功能:
-//   - 配色方案:默认 / 霓虹(蓝黑+青)/ 清爽(浅色+蓝),明暗自适应
-//   - 渐变背景:两个端点色(原生取色器 + RGB 数字输入)+ 角度
+// 功能(最新版,与静态包 @deepseek-ai/dsh-client-ui-appearance 同步):
+//   - 配色方案:默认 / 霓虹 / 清爽,明暗自适应
+//   - 背景:无 / 纯色 / 线性渐变 / 径向渐变(取色器 + RGB + 角度)
 //   - 图片/视频壁纸:本地文件导入,透明度/暗化调节
-//   - 对话框设置:玻璃输入框(透明度/模糊强度/渐变边框)实时调节
+//   - 侧边栏背景:纯色 / 渐变 / 玻璃(透明度 / 模糊强度)
+//   - 对话框设置:玻璃输入框(透明度 / 模糊强度 / 自定义边框)
+//     · 自定义边框:「渐变」与「纯色」统一渲染为实色边框(颜色 1 的
+//       透明实线),只作用于对话框 [data-composer-card] 的边框
 //   - 设置入口:设置 →「外观」;背景承载层挂在 shell.overlay
 // =============================================================
 
@@ -78,17 +81,37 @@ return {
       if (parts.length < 3 || parts.slice(0, 3).some(function (v) { return Number.isNaN(v) })) return null
       return { r: parts[0], g: parts[1], b: parts[2] }
     }
+
     function withAlpha(color, alpha) {
       const p = parseColor(color)
       if (!p) return color
       return 'rgba(' + p.r + ', ' + p.g + ', ' + p.b + ', ' + alpha + ')'
     }
 
+    function toHex(c) {
+      return '#' + [c.r, c.g, c.b].map(function (v) { return v.toString(16).padStart(2, '0') }).join('')
+    }
+
+    function fromHex(hex) {
+      const n = parseInt(hex.slice(1), 16)
+      return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 }
+    }
+
+    function clampColor(v) {
+      return Math.max(0, Math.min(255, v))
+    }
+
     // ---- 轻量状态 store ----
     const store = {
       state: {
         palette: 'default', wallpaper: null, opacity: 0.85, dim: 0.2,
-        glassEnabled: true, glassAlpha: 0.28, glassBlur: 32, glassBorder: true,
+        bgType: 'none', bgC1: { r: 10, g: 14, b: 23 }, bgC2: { r: 34, g: 211, b: 238 }, bgAngle: 135,
+        sidebarEnabled: false, sidebarType: 'solid',
+        sidebarC1: { r: 30, g: 41, b: 59 }, sidebarC2: { r: 13, g: 20, b: 32 }, sidebarAngle: 135,
+        sidebarAlpha: 0.3, sidebarBlur: 20,
+        glassEnabled: true, glassAlpha: 0.28, glassBlur: 32,
+        glassBorder: true, glassBorderGradient: true,
+        glassBorderC1: { r: 34, g: 211, b: 238 }, glassBorderC2: { r: 139, g: 92, b: 246 },
       },
       listeners: new Set(),
       getState: function () { return this.state },
@@ -126,12 +149,30 @@ return {
       return (pair && pair.light) ? pair.light : '#2563eb'
     }
 
-    // ---- 主题覆盖:配色 + 背景半透明化 合成同一层 ----
+    // 侧边栏背景 token 对:{ light, dark }。玻璃模式用中性半透明色。
+    function sidebarTokens(s) {
+      if (!s.sidebarEnabled) return null
+      if (s.sidebarType === 'solid') {
+        const v = 'rgb(' + s.sidebarC1.r + ', ' + s.sidebarC1.g + ', ' + s.sidebarC1.b + ')'
+        return { light: v, dark: v }
+      }
+      if (s.sidebarType === 'gradient') {
+        const v = 'linear-gradient(' + s.sidebarAngle + 'deg, rgb(' + s.sidebarC1.r + ', ' + s.sidebarC1.g + ', ' + s.sidebarC1.b + '), rgb(' + s.sidebarC2.r + ', ' + s.sidebarC2.g + ', ' + s.sidebarC2.b + '))'
+        return { light: v, dark: v }
+      }
+      return {
+        light: 'rgba(255, 255, 255, ' + s.sidebarAlpha + ')',
+        dark: 'rgba(8, 13, 22, ' + s.sidebarAlpha + ')',
+      }
+    }
+
+    // ---- 主题覆盖:配色 + 背景半透明化 + 侧边栏背景 合成同一层 ----
     let disposeLayer = null
     ctx.effect(function () {
-      const apply = function () {
-        const tokens = Object.assign({}, PALETTES[store.state.palette])
-        if (store.state.wallpaper) {
+      const applyTokens = function () {
+        const s = store.getState()
+        const tokens = Object.assign({}, PALETTES[s.palette] || {})
+        if (s.wallpaper) {
           ensureBaseTokens()
           for (const name of Object.keys(TINT_ALPHAS)) {
             const pair = baseTokens[name]
@@ -140,10 +181,14 @@ return {
             tokens[name] = { light: withAlpha(pair.light, alpha), dark: withAlpha(pair.dark, alpha) }
           }
         }
+        const st = sidebarTokens(s)
+        if (st !== null) {
+          tokens['--dsw-specific-sidebar-fill'] = st
+        }
         disposeLayer = theme.overrideTokens('dsh-appearance', tokens)
       }
-      apply()
-      const unsub = store.subscribe(apply)
+      applyTokens()
+      const unsub = store.subscribe(applyTokens)
       return function () {
         unsub()
         if (disposeLayer) disposeLayer()
@@ -151,18 +196,21 @@ return {
     })
 
     // ---- 玻璃输入框 CSS:按 store 状态实时生成 ----
+    // 「渐变」与「纯色」统一渲染:边框为实色(颜色 1 的透明实线),
+    // 只作用于对话框 [data-composer-card] 的边框,不再叠加渐变背景层。
     function glassCss(s) {
       if (!s.glassEnabled) return ''
       const a = s.glassAlpha
       const blurRule = s.glassBlur > 0
         ? 'backdrop-filter:blur(' + s.glassBlur + 'px) saturate(150%)!important;-webkit-backdrop-filter:blur(' + s.glassBlur + 'px) saturate(150%)!important;'
         : ''
-      var lightBg, darkBg, lightBorder, darkBorder
+      let lightBg, darkBg, lightBorder, darkBorder
       if (s.glassBorder) {
-        lightBg = 'linear-gradient(rgba(255,255,255,' + a + '),rgba(255,255,255,' + a + ')) padding-box,linear-gradient(135deg,rgba(255,255,255,0.8),rgba(255,255,255,0.12) 40%,rgba(255,255,255,0.55)) border-box'
-        darkBg = 'linear-gradient(rgba(8,13,22,' + a + '),rgba(8,13,22,' + a + ')) padding-box,linear-gradient(135deg,rgba(34,211,238,0.85),rgba(255,255,255,0.05) 40%,rgba(139,92,246,0.85)) border-box'
-        lightBorder = '1px solid transparent'
-        darkBorder = '1px solid transparent'
+        const bc = 'rgb(' + s.glassBorderC1.r + ', ' + s.glassBorderC1.g + ', ' + s.glassBorderC1.b + ')'
+        lightBg = 'rgba(255,255,255,' + a + ')'
+        darkBg = 'rgba(8,13,22,' + a + ')'
+        lightBorder = '1px solid ' + withAlpha(bc, 0.6)
+        darkBorder = '1px solid ' + withAlpha(bc, 0.7)
       } else {
         lightBg = 'rgba(255,255,255,' + a + ')'
         darkBg = 'rgba(8,13,22,' + a + ')'
@@ -207,11 +255,12 @@ return {
       const state = useStore()
       const w = state.wallpaper
       if (!w) return null
+      const mediaStyle = { width: '100%', height: '100%', objectFit: 'cover', opacity: state.opacity, display: 'block' }
       let media
       if (w.type === 'video') {
-        media = React.createElement('video', { src: w.url, autoPlay: true, loop: true, muted: true, playsInline: true, style: { width: '100%', height: '100%', objectFit: 'cover', opacity: state.opacity, display: 'block' } })
+        media = React.createElement('video', { src: w.url, autoPlay: true, loop: true, muted: true, playsInline: true, style: mediaStyle })
       } else if (w.type === 'image') {
-        media = React.createElement('img', { src: w.url, style: { width: '100%', height: '100%', objectFit: 'cover', opacity: state.opacity, display: 'block' } })
+        media = React.createElement('img', { src: w.url, style: mediaStyle })
       } else {
         media = React.createElement('div', { style: { position: 'absolute', inset: 0, background: w.url, opacity: state.opacity } })
       }
@@ -220,6 +269,31 @@ return {
         children.push(React.createElement('div', { key: 'dim', style: { position: 'absolute', inset: 0, background: 'rgba(0, 0, 0, ' + state.dim + ')' } }))
       }
       return React.createElement('div', { 'data-dsh-wallpaper': '', style: { position: 'absolute', inset: 0, overflow: 'hidden' } }, children)
+    }
+
+    // 侧边栏玻璃模糊层:只覆盖侧边栏列当前宽度,模糊其背后的内容
+    function SidebarBlurLayer() {
+      const state = useStore()
+      const pair = React.useState(0)
+      const width = pair[0]
+      const setWidth = pair[1]
+      React.useEffect(function () {
+        const el = document.querySelector('div:has(> [data-shell-overlay]) > :first-child')
+        if (el === null) return
+        const measure = function () { setWidth(el.getBoundingClientRect().width) }
+        measure()
+        const ro = new ResizeObserver(measure)
+        ro.observe(el)
+        return function () { ro.disconnect() }
+      }, [])
+      const active = state.sidebarEnabled && state.sidebarType === 'glass' && state.sidebarBlur > 0
+      if (!active || width <= 0) return null
+      return React.createElement('div', { 'data-dsh-sidebar-glass': '', style: {
+        position: 'absolute', left: 0, top: 0, width: width, height: '100%',
+        backdropFilter: 'blur(' + state.sidebarBlur + 'px) saturate(150%)',
+        WebkitBackdropFilter: 'blur(' + state.sidebarBlur + 'px) saturate(150%)',
+        pointerEvents: 'none',
+      } })
     }
 
     // 小工具
@@ -260,6 +334,55 @@ return {
         React.createElement('span', { style: { fontSize: 12, width: 44, textAlign: 'right', color: 'var(--dsw-alias-label-secondary)' } }, props.value + props.suffix),
       )
     }
+    // 分段选择
+    function Segmented(props) {
+      return React.createElement('div', { style: { display: 'flex', padding: 3, borderRadius: 10, background: 'var(--dsw-alias-bg-layer-2)', gap: 2 } },
+        props.options.map(function (opt) {
+          const active = props.value === opt.id
+          return React.createElement('button', {
+            key: opt.id,
+            onClick: function () { props.onChange(opt.id) },
+            style: {
+              flex: 1, padding: '6px 0', borderRadius: 8, cursor: 'pointer', border: 'none',
+              background: active ? 'var(--dsw-alias-bg-layer-1)' : 'transparent',
+              color: active ? 'var(--dsw-alias-label-primary)' : 'var(--dsw-alias-label-secondary)',
+              fontFamily: 'inherit', fontSize: 12, fontWeight: active ? 600 : 400,
+              boxShadow: active ? '0 1px 2px rgba(0, 0, 0, 0.15)' : 'none',
+            },
+          }, opt.label)
+        }),
+      )
+    }
+    // 颜色编辑器:原生取色器 + RGB 数字输入
+    function ColorEditor(props) {
+      const numField = function (key) {
+        return React.createElement('input', {
+          type: 'number', min: 0, max: 255, value: props.color[key],
+          onChange: function (e) {
+            const next = Object.assign({}, props.color)
+            next[key] = clampColor(parseInt(e.target.value, 10) || 0)
+            props.onChange(next)
+          },
+          style: {
+            width: 40, padding: '3px 4px', borderRadius: 6, border: '1px solid var(--dsw-alias-border-l2)',
+            background: 'var(--dsw-alias-bg-layer-2)', color: 'var(--dsw-alias-label-primary)',
+            fontFamily: 'inherit', fontSize: 12, textAlign: 'center',
+          },
+        })
+      }
+      return React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
+        React.createElement('input', {
+          type: 'color', value: toHex(props.color),
+          onChange: function (e) { props.onChange(fromHex(e.target.value)) },
+          style: {
+            width: 36, height: 24, padding: 0, border: '1px solid var(--dsw-alias-border-l2)',
+            borderRadius: 6, background: 'transparent', cursor: 'pointer',
+          },
+        }),
+        React.createElement('span', { style: { fontSize: 12, width: 40, color: 'var(--dsw-alias-label-secondary)' } }, props.label),
+        numField('r'), numField('g'), numField('b'),
+      )
+    }
 
     // 对话框设置:玻璃输入框调节
     function GlassSection() {
@@ -270,110 +393,181 @@ return {
         React.createElement(SwitchRow, { label: '玻璃输入框', value: state.glassEnabled, onChange: function (v) { set({ glassEnabled: v }) } }),
         state.glassEnabled ? React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
           React.createElement(SliderRow, {
-            label: '透明度', min: 10, max: 90, step: 5, suffix: '%',
+            label: '透明度', min: 5, max: 95, step: 1, suffix: '%',
             value: Math.round((1 - state.glassAlpha) * 100),
-            onChange: function (v) { set({ glassAlpha: Math.max(0.1, Math.min(0.9, 1 - v / 100)) }) },
+            onChange: function (v) { set({ glassAlpha: Math.max(0.05, Math.min(0.95, 1 - v / 100)) }) },
           }),
           React.createElement(SliderRow, {
             label: '模糊强度', min: 0, max: 60, step: 2, suffix: 'px',
             value: state.glassBlur,
             onChange: function (v) { set({ glassBlur: v }) },
           }),
-          React.createElement(SwitchRow, { label: '渐变边框', value: state.glassBorder, onChange: function (v) { set({ glassBorder: v }) } }),
+          React.createElement(SwitchRow, { label: '自定义边框', value: state.glassBorder, onChange: function (v) { set({ glassBorder: v }) } }),
+          state.glassBorder ? React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+            React.createElement(Segmented, {
+              value: state.glassBorderGradient ? 'gradient' : 'solid',
+              options: [
+                { id: 'gradient', label: '渐变' },
+                { id: 'solid', label: '纯色' },
+              ],
+              onChange: function (id) { set({ glassBorderGradient: id === 'gradient' }) },
+            }),
+            React.createElement(ColorEditor, {
+              label: '颜色 1',
+              color: state.glassBorderC1,
+              onChange: function (c) { set({ glassBorderC1: c }) },
+            }),
+            state.glassBorderGradient ? React.createElement(ColorEditor, {
+              label: '颜色 2',
+              color: state.glassBorderC2,
+              onChange: function (c) { set({ glassBorderC2: c }) },
+            }) : null,
+          ) : null,
         ) : null,
       )
     }
 
-    // 配色方案:带色点的紧凑按钮
-    function PaletteSection() {
+    // 侧边栏背景:纯色 / 渐变 / 玻璃
+    function SidebarSection() {
       const state = useStore()
       const set = function (patch) { store.setState(patch) }
-      const defs = [
-        { id: 'default', title: '默认', dot: readBrandLight() },
-        { id: 'neon', title: '霓虹', dot: '#06b6d4' },
-        { id: 'fresh', title: '清爽', dot: '#2563eb' },
-      ]
+      const preview = function () {
+        const s = store.getState()
+        if (!s.sidebarEnabled) return 'var(--dsw-alias-bg-layer-1)'
+        if (s.sidebarType === 'glass') return 'rgba(8, 13, 22, ' + s.sidebarAlpha + ')'
+        const st = sidebarTokens(s)
+        return (st && st.light) ? st.light : 'var(--dsw-alias-bg-layer-1)'
+      }
       return React.createElement(Card, null,
-        React.createElement(CardTitle, null, '配色方案'),
-        React.createElement('div', { style: { display: 'flex', gap: 8 } }, defs.map(function (def) {
-          const active = state.palette === def.id
-          return React.createElement('button', {
-            key: def.id,
-            onClick: function () { set({ palette: def.id }) },
+        React.createElement(CardTitle, null, '侧边栏背景'),
+        React.createElement(SwitchRow, { label: '自定义侧边栏', value: state.sidebarEnabled, onChange: function (v) { set({ sidebarEnabled: v }) } }),
+        state.sidebarEnabled ? React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+          React.createElement(Segmented, {
+            value: state.sidebarType,
+            options: [
+              { id: 'solid', label: '纯色' },
+              { id: 'gradient', label: '渐变' },
+              { id: 'glass', label: '玻璃' },
+            ],
+            onChange: function (id) { set({ sidebarType: id }) },
+          }),
+          state.sidebarType === 'solid' ? React.createElement(ColorEditor, {
+            label: '颜色 1',
+            color: state.sidebarC1,
+            onChange: function (c) { set({ sidebarC1: c }) },
+          }) : null,
+          state.sidebarType === 'gradient' ? React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+            React.createElement(ColorEditor, {
+              label: '颜色 1',
+              color: state.sidebarC1,
+              onChange: function (c) { set({ sidebarC1: c }) },
+            }),
+            React.createElement(ColorEditor, {
+              label: '颜色 2',
+              color: state.sidebarC2,
+              onChange: function (c) { set({ sidebarC2: c }) },
+            }),
+            React.createElement(SliderRow, {
+              label: '角度', min: 0, max: 360, step: 5, suffix: '°',
+              value: state.sidebarAngle,
+              onChange: function (v) { set({ sidebarAngle: v }) },
+            }),
+          ) : null,
+          state.sidebarType === 'glass' ? React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+            React.createElement(SliderRow, {
+              label: '透明度', min: 5, max: 90, step: 1, suffix: '%',
+              value: Math.round((1 - state.sidebarAlpha) * 100),
+              onChange: function (v) { set({ sidebarAlpha: Math.max(0.05, Math.min(0.9, 1 - v / 100)) }) },
+            }),
+            React.createElement(SliderRow, {
+              label: '模糊强度', min: 0, max: 60, step: 2, suffix: 'px',
+              value: state.sidebarBlur,
+              onChange: function (v) { set({ sidebarBlur: v }) },
+            }),
+          ) : null,
+          React.createElement('div', {
             style: {
-              flex: 1, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-              padding: '7px 0', borderRadius: 8,
-              border: active ? '1.5px solid var(--dsw-alias-brand-primary)' : '1px solid var(--dsw-alias-border-l1)',
-              background: active ? 'var(--dsw-alias-bg-layer-2)' : 'transparent',
-              fontFamily: 'inherit', fontSize: 13,
-              color: active ? 'var(--dsw-alias-label-primary)' : 'var(--dsw-alias-label-secondary)',
-              transition: 'border-color 0.15s, background 0.15s',
+              height: 32, borderRadius: 8, border: '1px solid var(--dsw-alias-border-l2)',
+              background: preview(), boxShadow: 'inset 0 1px 3px rgba(0, 0, 0, 0.12)',
             },
-          },
-            React.createElement('span', { style: { width: 10, height: 10, borderRadius: '50%', background: def.dot, boxShadow: 'inset 0 0 0 1px rgba(0, 0, 0, 0.15)' } }),
-            def.title,
-          )
-        })),
-        React.createElement(Hint, null, '明暗双模式自动跟随系统'),
+          }),
+        ) : null,
       )
     }
 
-    // 渐变编辑器:取色器 + RGB 数字 + 角度
-    function GradientEditor() {
+    // 背景:类型选择(无/纯色/线性/径向)+ 实时应用 + 壁纸
+    function BackgroundSection() {
       const state = useStore()
       const set = function (patch) { store.setState(patch) }
-      const parsed = state.wallpaper && state.wallpaper.type === 'gradient' ? parseGradient(state.wallpaper.url) : null
-      const [c1, setC1] = React.useState(parsed ? parsed.c1 : { r: 10, g: 14, b: 23 })
-      const [c2, setC2] = React.useState(parsed ? parsed.c2 : { r: 34, g: 211, b: 238 })
-      const [angle, setAngle] = React.useState(parsed ? parsed.angle : 135)
-      const clamp = function (v) { return Math.max(0, Math.min(255, v)) }
-      const toHex = function (c) {
-        return '#' + [c.r, c.g, c.b].map(function (v) { return v.toString(16).padStart(2, '0') }).join('')
-      }
-      const fromHex = function (hex) {
-        const n = parseInt(hex.slice(1), 16)
-        return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 }
-      }
-      const numField = function (value, onChange) {
-        return React.createElement('input', {
-          type: 'number', min: 0, max: 255, value: value, onChange: onChange,
-          style: { width: 44, padding: '3px 4px', borderRadius: 6, border: '1px solid var(--dsw-alias-border-l2)', background: 'var(--dsw-alias-bg-layer-2)', color: 'var(--dsw-alias-label-primary)', fontFamily: 'inherit', fontSize: 12, textAlign: 'center' },
-        })
-      }
-      const rgbRow = function (label, color, onColor) {
-        const field = function (key) {
-          return numField(color[key], function (e) {
-            const v = parseInt(e.target.value, 10)
-            const next = Object.assign({}, color)
-            next[key] = Number.isNaN(v) ? 0 : clamp(v)
-            onColor(next)
+      const applyDraft = function () {
+        const s = store.getState()
+        if (s.bgType === 'none') { set({ wallpaper: null }); return }
+        if (s.bgType === 'solid') {
+          set({ wallpaper: { type: 'gradient', url: 'rgb(' + s.bgC1.r + ', ' + s.bgC1.g + ', ' + s.bgC1.b + ')', name: '纯色背景' } })
+        } else if (s.bgType === 'linear') {
+          set({
+            wallpaper: {
+              type: 'gradient',
+              url: 'linear-gradient(' + s.bgAngle + 'deg, rgb(' + s.bgC1.r + ', ' + s.bgC1.g + ', ' + s.bgC1.b + '), rgb(' + s.bgC2.r + ', ' + s.bgC2.g + ', ' + s.bgC2.b + '))',
+              name: '线性渐变 ' + s.bgAngle + '°',
+            },
+          })
+        } else {
+          set({
+            wallpaper: {
+              type: 'gradient',
+              url: 'radial-gradient(circle at center, rgb(' + s.bgC1.r + ', ' + s.bgC1.g + ', ' + s.bgC1.b + '), rgb(' + s.bgC2.r + ', ' + s.bgC2.g + ', ' + s.bgC2.b + '))',
+              name: '径向渐变',
+            },
           })
         }
-        return React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-          React.createElement('input', {
-            type: 'color', value: toHex(color),
-            onChange: function (e) { onColor(fromHex(e.target.value)) },
-            style: { width: 38, height: 26, padding: 0, border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 6, background: 'transparent', cursor: 'pointer' },
-          }),
-          React.createElement('span', { style: { fontSize: 12, width: 44, color: 'var(--dsw-alias-label-secondary)' } }, label),
-          field('r'), field('g'), field('b'),
-        )
       }
-      const cssGradient = 'linear-gradient(' + angle + 'deg, rgb(' + c1.r + ', ' + c1.g + ', ' + c1.b + '), rgb(' + c2.r + ', ' + c2.g + ', ' + c2.b + '))'
-      const isGradient = state.wallpaper && state.wallpaper.type === 'gradient'
-      return React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
-        rgbRow('颜色 1', c1, setC1),
-        rgbRow('颜色 2', c2, setC2),
-        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-          React.createElement('span', { style: { fontSize: 12, width: 44, color: 'var(--dsw-alias-label-secondary)' } }, '角度'),
-          React.createElement('input', { type: 'range', min: 0, max: 360, step: 5, value: angle, onChange: function (e) { setAngle(parseInt(e.target.value, 10)) }, style: { flex: 1 } }),
-          React.createElement('span', { style: { fontSize: 12, width: 36, textAlign: 'right', color: 'var(--dsw-alias-label-secondary)' } }, angle + '°'),
+      const preview = function () {
+        const s = store.getState()
+        const c1 = 'rgb(' + s.bgC1.r + ', ' + s.bgC1.g + ', ' + s.bgC1.b + ')'
+        if (s.bgType === 'none') return 'var(--dsw-alias-bg-layer-1)'
+        if (s.bgType === 'solid') return c1
+        const c2 = 'rgb(' + s.bgC2.r + ', ' + s.bgC2.g + ', ' + s.bgC2.b + ')'
+        if (s.bgType === 'linear') return 'linear-gradient(' + s.bgAngle + 'deg, ' + c1 + ', ' + c2 + ')'
+        return 'radial-gradient(circle at center, ' + c1 + ', ' + c2 + ')'
+      }
+      return React.createElement(Card, null,
+        React.createElement(CardTitle, null, '背景'),
+        React.createElement(Segmented, {
+          value: state.bgType,
+          options: [
+            { id: 'none', label: '无' },
+            { id: 'solid', label: '纯色' },
+            { id: 'linear', label: '线性渐变' },
+            { id: 'radial', label: '径向渐变' },
+          ],
+          onChange: function (id) { set({ bgType: id }); applyDraft() },
+        }),
+        state.bgType === 'none' ? null : React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+          React.createElement(ColorEditor, {
+            label: '颜色 1',
+            color: state.bgC1,
+            onChange: function (c) { set({ bgC1: c }); applyDraft() },
+          }),
+          state.bgType === 'linear' || state.bgType === 'radial' ? React.createElement(ColorEditor, {
+            label: '颜色 2',
+            color: state.bgC2,
+            onChange: function (c) { set({ bgC2: c }); applyDraft() },
+          }) : null,
+          state.bgType === 'linear' ? React.createElement(SliderRow, {
+            label: '角度', min: 0, max: 360, step: 5, suffix: '°',
+            value: state.bgAngle,
+            onChange: function (v) { set({ bgAngle: v }); applyDraft() },
+          }) : null,
+          React.createElement('div', {
+            style: {
+              height: 32, borderRadius: 8, border: '1px solid var(--dsw-alias-border-l2)',
+              background: preview(), boxShadow: 'inset 0 1px 3px rgba(0, 0, 0, 0.12)',
+            },
+          }),
         ),
-        React.createElement('div', { style: { height: 36, borderRadius: 8, border: '1px solid var(--dsw-alias-border-l2)', background: cssGradient, boxShadow: 'inset 0 1px 3px rgba(0, 0, 0, 0.12)' } }),
-        React.createElement('button', {
-          onClick: function () { set({ wallpaper: { type: 'gradient', url: cssGradient, name: '自定义渐变 ' + angle + '°' } }) },
-          style: { padding: '8px 14px', borderRadius: 8, cursor: 'pointer', border: 'none', background: 'var(--dsw-alias-brand-primary)', color: '#ffffff', fontFamily: 'inherit', fontSize: 13, fontWeight: 600, alignSelf: 'flex-start' },
-        }, isGradient ? '更新渐变' : '应用渐变'),
+        React.createElement('div', { style: { height: 1, background: 'var(--dsw-alias-border-l1)' } }),
+        React.createElement(MediaEditor, null),
       )
     }
 
@@ -387,7 +581,7 @@ return {
           const file = input.files && input.files[0]
           if (!file) return
           const url = URL.createObjectURL(file)
-          set({ wallpaper: { type: type, url: url, name: file.name } })
+          set({ wallpaper: { type: type, url: url, name: file.name }, bgType: 'none' })
           input.value = ''
         }
       }
@@ -427,13 +621,37 @@ return {
       )
     }
 
-    // 背景:渐变 + 壁纸
-    function BackgroundSection() {
+    // 配色方案:带色点的紧凑按钮
+    function PaletteSection() {
+      const state = useStore()
+      const set = function (patch) { store.setState(patch) }
+      const defs = [
+        { id: 'default', title: '默认', dot: readBrandLight() },
+        { id: 'neon', title: '霓虹', dot: '#06b6d4' },
+        { id: 'fresh', title: '清爽', dot: '#2563eb' },
+      ]
       return React.createElement(Card, null,
-        React.createElement(CardTitle, null, '背景'),
-        React.createElement(GradientEditor, null),
-        React.createElement('div', { style: { height: 1, background: 'var(--dsw-alias-border-l1)' } }),
-        React.createElement(MediaEditor, null),
+        React.createElement(CardTitle, null, '配色方案'),
+        React.createElement('div', { style: { display: 'flex', gap: 8 } }, defs.map(function (def) {
+          const active = state.palette === def.id
+          return React.createElement('button', {
+            key: def.id,
+            onClick: function () { set({ palette: def.id }) },
+            style: {
+              flex: 1, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+              padding: '7px 0', borderRadius: 8,
+              border: active ? '1.5px solid var(--dsw-alias-brand-primary)' : '1px solid var(--dsw-alias-border-l1)',
+              background: active ? 'var(--dsw-alias-bg-layer-2)' : 'transparent',
+              fontFamily: 'inherit', fontSize: 13,
+              color: active ? 'var(--dsw-alias-label-primary)' : 'var(--dsw-alias-label-secondary)',
+              transition: 'border-color 0.15s, background 0.15s',
+            },
+          },
+            React.createElement('span', { style: { width: 10, height: 10, borderRadius: '50%', background: def.dot, boxShadow: 'inset 0 0 0 1px rgba(0, 0, 0, 0.15)' } }),
+            def.title,
+          )
+        })),
+        React.createElement(Hint, null, '明暗双模式自动跟随系统'),
       )
     }
 
@@ -442,20 +660,10 @@ return {
       return React.createElement('div', { 'data-dsh-appearance': '', style: { display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 440 } },
         React.createElement(PaletteSection, null),
         React.createElement(BackgroundSection, null),
+        React.createElement(SidebarSection, null),
         React.createElement(GlassSection, null),
-        React.createElement(Hint, null, '背景与渐变仅当前会话生效,刷新后需重新设置;配色与对话框设置即时生效。'),
+        React.createElement(Hint, null, '背景与渐变仅当前会话生效,刷新后需重新设置;配色、侧边栏与对话框设置即时生效。'),
       )
-    }
-
-    // 解析已应用渐变,用于编辑器回显
-    function parseGradient(url) {
-      const m = String(url).match(/^linear-gradient\((\d+)deg, rgb\((\d+),\s*(\d+),\s*(\d+)\), rgb\((\d+),\s*(\d+),\s*(\d+)\)\)$/)
-      if (!m) return null
-      return {
-        angle: parseInt(m[1], 10),
-        c1: { r: parseInt(m[2], 10), g: parseInt(m[3], 10), b: parseInt(m[4], 10) },
-        c2: { r: parseInt(m[5], 10), g: parseInt(m[6], 10), b: parseInt(m[7], 10) },
-      }
     }
 
     // ---- 插槽注册 ----
@@ -469,6 +677,12 @@ return {
       return slots.register(
         { name: 'shell.overlay', id: 'dsh-wallpaper' },
         function () { return React.createElement(WallpaperLayer, null) },
+      )
+    })
+    slots.inject('shell.overlay', function () {
+      return slots.register(
+        { name: 'shell.overlay', id: 'dsh-sidebar-glass' },
+        function () { return React.createElement(SidebarBlurLayer, null) },
       )
     })
   },
