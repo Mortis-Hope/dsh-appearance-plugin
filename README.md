@@ -111,4 +111,6 @@ A: 动态导入的插件是会话级的,换设备或刷新后请按「安装 - �
 
 ## 反馈
 
-使用中遇到问题或有任何建议,欢迎提交 [GitHub Issue](https://github.com/Mortis-Hope/deepseek-harness-bg/issues)。
+使用中遇到问题或有任何建议,欢迎提交 [GitHub Issue](https://github.com/Mortis-Hope/dsh-appearance-plugin/issues)。
+
+[English version](README.en.md) | 中文
